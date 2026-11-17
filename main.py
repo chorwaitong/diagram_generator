@@ -11,9 +11,10 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 img_dir = f"{script_dir}\\images\\"
 _stop_generation_requested = False
 
-def get_session_subfolder(caption):
+def get_session_subfolder(caption, methodology_text):
     # Create a safe, short hash folder name from the caption text
-    slug1 = hashlib.md5(caption.encode('utf-8')).hexdigest()[:10]
+    capandmethod = caption + methodology_text
+    slug1 = hashlib.md5(capandmethod.encode('utf-8')).hexdigest()[:10]
     clean_caption = re.sub(r'[^\w\s-]', '', caption).strip()
     slug2 = re.sub(r'[-\s]+', '_', clean_caption)[:50] # Limits length to roughly 3 visual lines / short phrase
     if not slug2:
@@ -139,7 +140,7 @@ def _invoke_paperbanana(llm, caption, methodology_text, render_mode="diagram", v
     _stop_generation_requested = False
     try:     
         maxRetries, hasValidStructure, hasValidOutput = 5, False, False
-        session_subfolder = get_session_subfolder(caption)
+        session_subfolder = get_session_subfolder(caption, methodology_text)
         exec_json_path = os.path.join(session_subfolder, "exec.json")
         img_filename = os.path.join(session_subfolder, f"paperbanana_{getTimeNow()}")
         

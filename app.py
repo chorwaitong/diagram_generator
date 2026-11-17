@@ -72,10 +72,9 @@ def load_session():
     session_subfolder = os.path.join(img_dir, session_name)
     
     caption, methodology, code_str, blueprint_str, image_url = "", "", "", "{}", ""
-    
-    inputs_path = os.path.join(session_subfolder, "inputs.json")
-    exec_json_path = os.path.join(session_subfolder, "exec.json")
+    runs_data = []
 
+    inputs_path = os.path.join(session_subfolder, "inputs.json")
     if os.path.exists(inputs_path):
         with open(inputs_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -87,20 +86,39 @@ def load_session():
         with open(bp_path, "r", encoding="utf-8") as f:
             blueprint_str = f.read()
 
+    exec_json_path = os.path.join(session_subfolder, "exec.json")
     if os.path.isfile(exec_json_path):
         with open(exec_json_path, "r", encoding="utf-8") as file:
             execution_history = json.load(file)
 
-        for item in reversed(execution_history):
+        for idx, item in enumerate(execution_history):
             if 'code' in item and 'output' in item:
-                if os.path.isfile(item['output']):
-                    image_url = f"/images/{session_name}/{os.path.basename(item['output'])}"
-                    code_str = item['code']
-                    break
+                out_path = item['output']
+                if os.path.isfile(out_path):
+                    image_url = f"/images/{session_name}/{os.path.basename(out_path)}"
+                    runs_data.append({
+                        "index": idx,
+                        "trial": item.get("trial", idx),
+                        "status": item.get("status", "complete"),
+                        "code": item["code"],
+                        "image_url": image_url,
+                        "error": item.get("error", None)
+                    })
+
+        # for item in reversed(execution_history):
+        #     if 'code' in item and 'output' in item:
+        #         if os.path.isfile(item['output']):
+        #             image_url = f"/images/{session_name}/{os.path.basename(item['output'])}"
+        #             code_str = item['code']
+        #             break
         
     sessions = [os.path.basename(f) for f in glob.glob(os.path.join(img_dir, "session_*"))]
+    # Default to the latest run if available
+    initial_code = runs_data[-1]["code"] if runs_data else ""
+    initial_image = runs_data[-1]["image_url"] if runs_data else ""
     return render_template('index.html', sessions=sessions, caption=caption, methodology=methodology, 
-                           blueprint_str=blueprint_str, code_str=code_str, image_url=image_url, current_session=session_name, render_mode="diagram")
+                           blueprint_str=blueprint_str, code_str=initial_code, image_url=initial_image, 
+                           current_session=session_name, runs=runs_data, render_mode="diagram")
 
 @app.route('/images/<path:filename>')
 def serve_image(filename):

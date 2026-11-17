@@ -58,6 +58,15 @@
 
         <!-- Right Panel: Visualization, Blueprint, Code -->
         <div class="panel">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; background: #e9ecef; padding: 8px; border-radius: 4px;">
+                <div>
+                    <button type="button" onclick="prevRun()" style="padding: 5px 10px;">← Prev Run</button>
+                    <span id="run-indicator" style="font-weight: bold; margin: 0 10px;">Run 0 / 0</span>
+                    <button type="button" onclick="nextRun()" style="padding: 5px 10px;">Next Run →</button>
+                </div>
+                <div id="run-status-badge" style="font-size: 12px; color: #555;">Status: Loaded</div>
+            </div>
+
             <h3>Rendered Diagram Preview</h3>
             <div class="preview-box" id="image-preview">
                 {% if image_url %}
@@ -85,6 +94,48 @@
 
     <script>
         let abortController = null;
+        const sessionRuns = {{ runs | tojson | safe }};
+        let currentRunIndex = sessionRuns.length - 1; // Default to latest run
+
+        function updateRunDisplay() {
+            if (sessionRuns.length === 0) return;
+            if (currentRunIndex < 0) currentRunIndex = 0;
+            if (currentRunIndex >= sessionRuns.length) currentRunIndex = sessionRuns.length - 1;
+
+            const run = sessionRuns[currentRunIndex];
+            
+            // Update Preview Image
+            document.getElementById("image-preview").innerHTML = `<img src="${run.image_url}" alt="Diagram Preview">`;
+            document.getElementById("download-container").innerHTML = `<a id="download-btn" href="${run.image_url}" download="diagram.png"><button>Download Image</button></a>`;
+            
+            // Update Code Textarea
+            document.getElementById("code-box").value = run.code;
+            
+            // Update Indicator & Status
+            document.getElementById("run-indicator").innerText = `Run ${currentRunIndex + 1} of ${sessionRuns.length} (Trial: ${run.trial})`;
+            document.getElementById("run-status-badge").innerText = `Status: ${run.status}`;
+        }
+
+        function prevRun() {
+            if (currentRunIndex > 0) {
+                currentRunIndex--;
+                updateRunDisplay();
+            }
+        }
+
+        function nextRun() {
+            if (currentRunIndex < sessionRuns.length - 1) {
+                currentRunIndex++;
+                updateRunDisplay();
+            }
+        }
+
+        // Initialize display on page load if runs exist
+        window.onload = function() {
+            if (sessionRuns.length > 0) {
+                updateRunDisplay();
+            }
+        };
 
         function loadExample() {
             const sampleCaption = "A compact, vertical systems-engineering block diagram illustrating the integrated 3-part research framework for robust and efficient eco-driving control, optimized for portrait A4 document layout.";
