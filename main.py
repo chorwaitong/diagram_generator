@@ -1,12 +1,27 @@
 import base64
+import hashlib
 import json
 import os
+import re
 import time
 import traceback
 
 MODEL_BAME = "gemini-2.5-flash-lite"
 script_dir = os.path.dirname(os.path.realpath(__file__))
 img_dir = f"{script_dir}\\images\\"
+_stop_generation_requested = False
+
+def get_session_subfolder(caption):
+    # Create a safe, short hash folder name from the caption text
+    slug1 = hashlib.md5(caption.encode('utf-8')).hexdigest()[:10]
+    clean_caption = re.sub(r'[^\w\s-]', '', caption).strip()
+    slug2 = re.sub(r'[-\s]+', '_', clean_caption)[:50] # Limits length to roughly 3 visual lines / short phrase
+    if not slug2:
+        slug2 = "untitled_session"
+
+    session_dir = os.path.join(img_dir, f"session_{slug1}_{slug2}")
+    os.makedirs(session_dir, exist_ok=True)
+    return session_dir
 
 def getTimeNow():
     return time.strftime("%Y%m%dT%H%M%SZ")
@@ -115,16 +130,32 @@ def _prompt_paperbanana_critic(blueprint_json, critique_history=""):
     Previous Critique History: {critique_history}
     """
 
+def request_stop_generation():
+    global _stop_generation_requested
+    _stop_generation_requested = True
+
 def _invoke_paperbanana(llm, caption, methodology_text, render_mode="diagram", verbose = False):        
+    global _stop_generation_requested
+    _stop_generation_requested = False
     try:     
         maxRetries, hasValidStructure, hasValidOutput = 5, False, False
-        #Planner & Stylist Agent (Structured JSON prompt)
-        # Loop for structure generation
+        session_subfolder = get_session_subfolder(caption)
+        exec_json_path = os.path.join(session_subfolder, "exec.json")
+        img_filename = os.path.join(session_subfolder, f"paperbanana_{getTimeNow()}")
+        
+        # Save input configuration to JSON in the session subfolder
+        inputs_data = {"caption": caption, "methodology": methodology_text, "render_mode": render_mode}
+        inputs_path = os.path.join(session_subfolder, "inputs.json")
+        with open(inputs_path, "w", encoding="utf-8") as f:
+            json.dump(inputs_data, f, indent=4)
 
-        img_filename = f"{img_dir}\img_paperbanana_{getTimeNow()}"
-
+        yield {"status": "progress", "message": "Generating structured blueprint..."}
         prompt = _prompt_paperbanana_structure(caption, methodology_text)
         for retry in range(maxRetries):
+            if _stop_generation_requested:
+                yield {"status": "stopped", "message": "Generation stopped by user."}
+                return
+            
             print(f"\n\n ============= Paper banana Structure Generation ({retry} of {maxRetries}) ==============")
             promptObj = {'type':'TextReply', 'prompt':prompt}
             response = llm.invoke(promptObj)
@@ -144,20 +175,35 @@ def _invoke_paperbanana(llm, caption, methodology_text, render_mode="diagram", v
 
         if not hasValidStructure:
             print("[X] Paperbanana structure generation loop complete with error")
-            return {'success':False}    
+            yield {"status": "error", "message": "Invalid structure obtained, rendering wont continue."}
+            # return {'success':False}    
         else:
             print("[*] Valid structure obtained.")
+        
+        # Save structured blueprint to JSON
+        blueprint_path = os.path.join(session_subfolder, "blueprint.json")
+        with open(blueprint_path, "w", encoding="utf-8") as f:
+            json.dump(structured_blueprint, f, indent=4)
+        yield {
+            "status": "blueprint_ready", 
+            "blueprint": json.dumps(structured_blueprint, indent=2),
+            "session": os.path.basename(session_subfolder)
+        }
 
-        maxRetries = 20 # Allow more trials
         execution_history = []
-        error_code = ""
-        error_desc = ""
-        critique_history = ""
+        if os.path.isfile(exec_json_path):
+            with open(exec_json_path, "r", encoding="utf-8") as file:
+                execution_history = json.load(file)
+            print("[*] Loaded execution history from {exec_json_path}")
+
+        maxRetries = 20 # Allow more trials        
+        error_code, error_desc,  critique_history= "", "", ""
                   
         from PaperBananaRenderer import PaperBananaRenderer
         code_prompt = _prompt_paperbanana_dot_coder(structured_blueprint) if render_mode == "diagram" else _prompt_paperbanana_matplot_coder(structured_blueprint) 
         prompt = code_prompt
         for retry in range(maxRetries):            
+            yield {"status": "progress", "message": f"Rendering iteration {retry + 1}..."}
             print(f"\n\n ============= Paper banana Rendering ({retry} of {maxRetries}) ==============")
             excObj = {'trial':retry, 'status': 'complete with error'}
 
@@ -178,23 +224,34 @@ def _invoke_paperbanana(llm, caption, methodology_text, render_mode="diagram", v
                 continue
 
             output_filename = f"{img_filename}_r{retry}.png"  
-            prompt_filename = f"{img_filename}_r{retry}.txt"  
-            with open(prompt_filename, "w", encoding="utf-8") as pf:
-                pf.write(prompt)
-
             returned_code = code_response['code']
+            excObj['output'] = output_filename
+
+            yield {
+                "status": "code_ready", 
+                "code": returned_code,
+                "iteration": retry
+            }
             result = PaperBananaRenderer.render_dot_code(returned_code, structured_blueprint, output_filename) if render_mode=="diagram" else PaperBananaRenderer.execute_matplotlib_code(returned_code, output_filename)
 
             if result.get("status") != "success":
                 error_code = returned_code
                 error_desc = result.get("error", "Unknown execution failure")
                 processed_error_code = result.get("error_code", "")
-                errMsg(f"Failed in rendering image: {error_desc} \nProcessed Code:\n{processed_error_code}")   
+                errMsg = f"Failed in rendering image: {error_desc} \nProcessed Code:\n{processed_error_code}"  
                 excObj['error'] = error_desc
                 excObj['code'] = processed_error_code                 
                 execution_history.append(excObj)
                 print(errMsg)
                 continue
+
+            # Convert image to base64 or relative url to stream immediately
+            image_url = f"/images/{os.path.basename(session_subfolder)}/{os.path.basename(output_filename)}"
+            yield {
+                "status": "image_ready",
+                "image_url": image_url,
+                "iteration": retry
+            }
 
             # CLOSED-LOOP VISUAL INSPECTION (VLM CRITIC AGENT)
             time.sleep(5) # Rest a while before next move...
@@ -208,22 +265,21 @@ def _invoke_paperbanana(llm, caption, methodology_text, render_mode="diagram", v
                 promptObj = {'type':'HumanMessage', 'prompt':critic_prompt_text, "mime_type":"image/png", "data":img_base64}
                 critic_res = llm.invoke(promptObj)
                 critic_data = safe_parse_llm_json_v2(critic_res)
-                
+                excObj['code'] = returned_code
                 if critic_data and critic_data.get("status") == "APPROVED":
                     print("[SUCCESS] VLM Critic Approved the Diagram!")
-                    excObj['status'] = 'Complete, diagram approved by critic'                
+                    excObj['status'] = 'Complete, diagram approved by critic'            
                     execution_history.append(excObj)
                     hasValidOutput = True
                     break
                 else:
                     feedback = critic_data.get("feedback", "Visual layout defect detected.") if critic_data else "Critic parsing failed."
                     print(f"[CRITIC REJECTED]: {feedback}")
-                    error_code = returned_code
+                    yield {"status": "critic_rejected", "feedback": feedback}
                     error_desc = f"Visual QA Defect Detected by Critic: {feedback}"
                     critique_history += f" | Attempt {retry+1} feedback: {feedback}"
-                    excObj['status'] = 'Complete but diagram disapproved'      
-                    excObj['error'] = error_desc
-                    excObj['code'] = error_code     
+                    excObj['status'] = 'Complete, but diagram disapproved'      
+                    excObj['error'] = error_desc            
                     execution_history.append(excObj)
                     continue
             else:
@@ -231,28 +287,32 @@ def _invoke_paperbanana(llm, caption, methodology_text, render_mode="diagram", v
                 error_desc = "Render completed but output file missing on disk."
                 continue
 
-        json_path = f"{img_filename}_exec.json"
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(execution_history, f, indent=4)
+        
 
         if hasValidOutput:            
             print("Paperbanana invoking loop complete")
-            return {'success':True,
-                    'render_details':
-                        {'output_path': output_filename,
-                        'code': returned_code
-                        }
-                    }
+            yield {"status": "success", "output_path": output_filename, "code": returned_code}
+            # return {'success':True,
+            #         'render_details':
+            #             {'output_path': output_filename,
+            #             'code': returned_code
+            #             }
+            #         }
         else:
-            print("Paperbanana invoking loop complete with error")
-            return {'success':False
-                    }            
+            yield {"status": "failed", "message": "Max retries reached without approval."}
+            # print("Paperbanana invoking loop complete with error")
+            # return {'success':False
+            #         }            
         
-
     except Exception as e:
         print(f"Exception while invoking paper banana")
         traceback.print_exc()
-        return {'error': f"Exception: {e}"}
+        yield {"status": "error", "message": str(e)}
+        # return {'error': f"Exception: {e}"}
+    finally:
+        if execution_history and len(execution_history)>0:            
+            with open(exec_json_path, "w", encoding="utf-8") as f:
+                json.dump(execution_history, f, indent=4)
 
 def safe_parse_llm_json_v2(response):
     from langchain_core.utils.json import parse_json_markdown

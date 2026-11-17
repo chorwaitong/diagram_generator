@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PaperBanana Web Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f4f6f9; }
+        .container { display: flex; gap: 20px; }
+        .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); flex: 1; }
+        textarea { width: 100%; height: 100px; margin-bottom: 10px; }
+        input[type="text"] { width: 100%; padding: 8px; margin-bottom: 10px; }
+        .preview-box { width: 100%; max-height: 500px; border: 1px solid #ddd; display: flex; align-items: center; justify-content: center; background: #fafafa; overflow: hidden; margin-bottom: 10px; }
+        .preview-box img { max-width: 100%; max-height: 480px; object-fit: contain; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 4px; max-height: 200px; overflow-y: auto; font-size: 12px; }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .history-list { list-style: none; padding: 0; max-height: 150px; overflow-y: auto; border: 1px solid #eee; }
+        .history-list li { padding: 5px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+        .history-list li:hover { background: #f1f1f1; }
+        #status-bar { margin-bottom: 15px; padding: 10px; background: #e9ecef; border-radius: 4px; font-weight: bold; color: #333; }
+    </style>
+</head>
+<body>
+    <h1>PaperBanana Flask Dashboard</h1>
+    <div id="status-bar">Status: Ready</div>
+    
+    <div class="container">
+        <!-- Left Panel: Inputs & Controls -->
+        <div class="panel" style="max-width: 30vw;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h3>Inputs</h3>
+                <button type="button" onclick="loadExample()" style="background: #6c757d; padding: 5px 10px; font-size: 12px;">Load Example</button>
+            </div>
+
+            <form id="genForm">
+                <label>Caption:</label>
+                <textarea name="caption" id="caption-box">{{ caption }}</textarea>
+                <label>Methodology:</label>
+                <textarea name="methodology" id="methodology-box" style="height: 150px;">{{ methodology }}</textarea>
+                <label>Render Mode:</label>
+                <select name="render_mode">
+                    <option value="diagram" {% if render_mode == 'diagram' %}selected{% endif %}>Diagram (Graphviz)</option>
+                    <option value="matplotlib" {% if render_mode == 'matplotlib' %}selected{% endif %}>Matplotlib</option>
+                </select><br><br>
+                <!-- Inside your genForm in templates/index.html -->
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button type="submit" style="flex: 2;">Generate / Refresh Iteration</button>
+                    <button type="button" id="stop-btn" onclick="stopGeneration()" style="flex: 1; background: #dc3545; display: none;">Stop</button>
+                </div>
+            </form>
+            <hr>
+            <h3>Session History Sessions</h3>
+            <ul class="history-list">
+                {% for session in sessions %}
+                <li><a href="/load_session?session={{ session }}">{{ session }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <!-- Right Panel: Visualization, Blueprint, Code -->
+        <div class="panel">
+            <h3>Rendered Diagram Preview</h3>
+            <div class="preview-box" id="image-preview">
+                {% if image_url %}
+                    <img src="{{ image_url }}" alt="Diagram Preview">
+                {% else %}
+                    <p>No image generated yet.</p>
+                {% endif %}
+            </div>
+            <div id="download-container">
+                {% if image_url %}
+                    <a id="download-btn" href="{{ image_url }}" download="diagram.png"><button>Download Image</button></a>
+                {% endif %}
+            </div>
+
+            <h3>Structure Blueprint (JSON)</h3>
+            <form method="POST" action="/rerender">
+                <textarea id="blueprint-box" name="blueprint_json" style="height: 100px;">{{ blueprint_str }}</textarea>
+                <h3>Generated Code</h3>
+                <textarea id="code-box" name="generated_code" style="height: 120px;">{{ code_str }}</textarea>
+                <input type="hidden" name="session_id" value="{{ current_session }}">
+                <button type="submit">Re-render from Code/Blueprint</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let abortController = null;
+
+        function loadExample() {
+            const sampleCaption = "A compact, vertical systems-engineering block diagram illustrating the integrated 3-part research framework for robust and efficient eco-driving control, optimized for portrait A4 document layout.";
+            
+            const sampleMethodology = `A clean, minimalist, vector-style portrait system block diagram on a pure white background, designed for standard A4 academic thesis documents (compact vertical footprint spanning approx. 1/4 page width/height ratio). Use a professional color palette consisting of navy blue (#1B365D), slate gray (#5C768D), and teal accents (#008080).
+
+Layout and Structure (Stacked / Vertical Convergence):
+- Vertical Stack Layout: To avoid an excessively wide aspect ratio, stack the three core objective modules in a balanced vertical or two-column staggered arrangement that feeds compactly downward into the final terminal node.
+- Module 1 (Objective O1 - Real-Time Soft Sensor): Compact box with an embedded sensor icon, detailing vehicle mass and road grade estimation (RLM-SMFF & SRAEKF).
+- Module 2 (Objective O2 - Fault-Tolerant Robust Control): Compact box with an embedded robustness/shield icon, detailing the DR²MPC architecture for autonomous platooning.
+- Module 3 (Objective O3 - Machine Learning Optimization): Compact box with an embedded ML/nodes icon, detailing automated cost tuning via SENMPC and bi-level framework.
+- Terminal Node (Bottom): A centered, unified container titled "Robust & Efficient Eco-Driving Control Framework".
+- Integration Flow: Clean, converging arrows flowing from the modules downward into the final control framework.
+- Visual Style: Sharp vector lines, clean container boxes with embedded geometric icons inside each block, legible sans-serif typography, and professional aspect ratio suitable for portrait thesis formatting.`;
+
+            document.getElementById("caption-box").value = sampleCaption;
+            document.getElementById("methodology-box").value = sampleMethodology;
+            document.getElementById("status-bar").innerText = "Status: Example loaded successfully!";
+        }
+
+        function stopGeneration() {
+            if (abortController) {
+                abortController.abort();
+            }
+            fetch('/stop', { method: 'POST' });
+            document.getElementById("status-bar").innerText = "Status: Generation terminated by user.";
+            document.getElementById("stop-btn").style.display = "none";
+        }
+
+        document.getElementById("genForm").addEventListener("submit", function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            
+            abortController = new AbortController();
+            document.getElementById("stop-btn").style.display = "inline-block";
+            document.getElementById("status-bar").innerText = "Status: Starting generation process...";
+            
+            fetch('/generate', {
+                method: 'POST',
+                body: formData,
+                signal: abortController.signal
+            }).then(response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                function read() {
+                    reader.read().then(({ done, value }) => {
+                        if (done) {
+                            document.getElementById("stop-btn").style.display = "none";
+                            return;
+                        }
+
+                        let chunk = decoder.decode(value, { stream: true });
+                        
+                        chunk.split("\n\n").forEach(line => {
+                            if (line.startsWith("data: ")) {
+                                try {
+                                    let data = JSON.parse(line.replace("data: ", ""));
+                                    
+                                    if (data.status === "progress" || data.status === "rejected") {
+                                        document.getElementById("status-bar").innerText = "Status: " + (data.message || data.feedback);
+                                    } else if (data.status === "blueprint_ready") {
+                                        document.getElementById("blueprint-box").value = data.blueprint;
+                                        document.getElementById("status-bar").innerText = "Status: Blueprint obtained!";
+                                    } else if (data.status === "code_ready") {
+                                        document.getElementById("code-box").value = data.code;
+                                        document.getElementById("status-bar").innerText = `Status: Iteration ${data.iteration}: Code generated.`;
+                                    } else if (data.status === "image_ready") {
+                                        document.getElementById("image-preview").innerHTML = `<img src="${data.image_url}" alt="Live Preview">`;
+                                        document.getElementById("download-container").innerHTML = `<a id="download-btn" href="${data.image_url}" download="diagram.png"><button>Download Image</button></a>`;
+                                        document.getElementById("status-bar").innerText = `Status: Iteration ${data.iteration}: Image rendered & displayed!`;
+                                    } else if (data.status === "approved" || data.status === "success") {
+                                        document.getElementById("status-bar").innerText = "Status: Generation complete & approved!";
+                                    } else if (data.status === "error") {
+                                        document.getElementById("status-bar").innerText = "Status Error: " + data.message;
+                                    }
+                                } catch (err) {
+                                    console.error("Error parsing JSON stream chunk:", err);
+                                }
+                            }
+                        });
+                        read();
+                    });
+                }
+                read();
+            }).catch(err => {
+                if (err.name === 'AbortError') {
+                    document.getElementById("status-bar").innerText = "Status: Generation aborted.";
+                } else {
+                    document.getElementById("status-bar").innerText = "Status: Network or generation error.";
+                    console.error(err);
+                }
+                document.getElementById("stop-btn").style.display = "none";
+            });
+        });
+    </script>
+</body>
+</html>
